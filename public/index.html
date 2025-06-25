@@ -1,78 +1,102 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8">
   <title>Node Unblocker</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- CryptoJS を読み込み -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding:20px; }
+    #error { color: red; display:none; margin-bottom:1em; }
+  </style>
 </head>
 <body>
   <h1>Node Unblocker</h1>
-  <div id="error" style="color:red; display:none;"></div>
+  <div id="error"></div>
   <form id="unblocker-form">
-    <p>
-      URLまたはキーワード:
-      <input type="text" id="url" autofocus>
-      <input type="submit" value="Go">
-    </p>
+    <label>
+      URL or Search:
+      <input type="text" id="url" autofocus style="width:60%;">
+    </label>
+    <button type="submit">Go</button>
   </form>
 
-  <!-- 広告や説明省略 -->
   <h3>About Node Unblocker</h3>
-  <p>Node.js製の高速Webプロキシ…</p>
+  <p>
+    Node Unblocker は、CGIProxy や PHProxy と同様のウェブプロキシです。  
+    AES-256-CBC で暗号化された URL を経由して、フィルタや検閲を回避します。
+  </p>
 
   <script>
-    // ここにサーバーと合わせた同一の16進キーを入れる
-    const KEY_HEX = '<ここにENCRYPTION_KEYの値をペースト>';
-    const KEY = CryptoJS.enc.Hex.parse(KEY_HEX);
+    const SECRET_KEY_HEX =
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-    // URLセーフBase64変換
-    function base64url(str) {
-      return str.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    // hex → Uint8Array
+    function hexToBytes(hex) {
+      const bytes = new Uint8Array(hex.length/2);
+      for (let i=0; i<bytes.length; i++) {
+        bytes[i] = parseInt(hex.substr(i*2,2), 16);
+      }
+      return bytes;
     }
 
-    // AES-CBCで暗号化（IV付き）
-    function encrypt(text) {
-      const iv = CryptoJS.lib.WordArray.random(16);
-      const encrypted = CryptoJS.AES.encrypt(text, KEY, {
-        iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7
+    // AES-CBC 暗号化
+    async function encryptUrl(plain) {
+      const keyBytes = hexToBytes(SECRET_KEY_HEX);
+      const key = await crypto.subtle.importKey(
+        'raw', keyBytes, { name:'AES-CBC' }, false, ['encrypt']
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(16));
+      const encoded = new TextEncoder().encode(plain);
+      const ctBuffer = await crypto.subtle.encrypt(
+        { name:'AES-CBC', iv }, key, encoded
+      );
+      const ctBytes = new Uint8Array(ctBuffer);
+      const combined = new Uint8Array(iv.length + ctBytes.length);
+      combined.set(iv);
+      combined.set(ctBytes, iv.length);
+
+      // Base64
+      let bin = '';
+      combined.forEach(b => bin += String.fromCharCode(b));
+      let b64 = btoa(bin);
+
+      // URL-safe
+      return b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    }
+
+    document
+      .getElementById('unblocker-form')
+      .addEventListener('submit', async e => {
+        e.preventDefault();
+        let u = document.getElementById('url').value.trim();
+        if (!u) return;
+        if (!/^https?:\/\//i.test(u)) {
+          if (u.includes('.') && !u.includes(' ')) {
+            u = 'https://' + u;
+          } else {
+            u =
+              'https://google.com/search?q=' +
+              encodeURIComponent(u);
+          }
+        }
+        const enc = await encryptUrl(u);
+        window.location.href =
+          `${location.protocol}//${location.host}/proxy/${enc}`;
       });
-      // iv + ciphertext を連結してBase64 → URLセーフ化
-      const combined = iv.concat(encrypted.ciphertext);
-      return base64url(combined.toString(CryptoJS.enc.Base64));
-    }
 
-    // エラー表示用
-    function showError(msg) {
-      const e = document.getElementById('error');
-      e.textContent = msg;
-      e.style.display = 'block';
-    }
-
-    document.getElementById('unblocker-form').onsubmit = function() {
-      let val = document.getElementById('url').value.trim();
-      if (!val) { showError('URLを入力してください'); return false; }
-      // プロトコル省略時はGoogle検索 or https://補完
-      if (!val.startsWith('http')) {
-        if (val.includes('.') && !val.includes(' ')) val = 'https://' + val;
-        else val = 'https://google.com/search?q=' + encodeURIComponent(val);
+    // URL の ?error=xxx を画面に表示
+    function checkError() {
+      const p = new URLSearchParams(location.search);
+      if (p.has('error')) {
+        const e = decodeURIComponent(p.get('error'));
+        const el = document.getElementById('error');
+        el.textContent = e;
+        el.style.display = 'block';
       }
-      try {
-        const token = encrypt(val);
-        // エンコードして /proxy/<暗号トークン> へリダイレクト
-        window.location = `${location.protocol}//${location.host}/proxy/${encodeURIComponent(token)}`;
-      } catch (e) {
-        showError('暗号化に失敗しました');
-      }
-      return false;
-    };
-
-    // URLバーに ?error=xxx があれば表示
-    window.onload = function() {
-      const p = location.search.match(/[?&]error=([^&]+)/);
-      if (p) showError(decodeURIComponent(p[1]));
+    }
+    window.onload = () => {
       document.getElementById('url').focus();
+      checkError();
     };
   </script>
 </body>
