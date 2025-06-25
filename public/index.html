@@ -7,6 +7,8 @@
   <style>
     body { font-family: sans-serif; padding:20px; }
     #error { color: red; display:none; margin-bottom:1em; }
+    input[type="text"] { width:70%; padding:0.5em; }
+    button { padding:0.5em 1em; }
   </style>
 </head>
 <body>
@@ -15,50 +17,52 @@
   <form id="unblocker-form">
     <label>
       URL or Search:
-      <input type="text" id="url" autofocus style="width:60%;">
+      <input type="text" id="url" autocomplete="off" autofocus>
     </label>
     <button type="submit">Go</button>
   </form>
 
   <h3>About Node Unblocker</h3>
   <p>
-    Node Unblocker は、CGIProxy や PHProxy と同様のウェブプロキシです。  
-    AES-256-CBC で暗号化された URL を経由して、フィルタや検閲を回避します。
+    Node Unblocker はウェブプロキシです。  
+    クライアント側で AES-256-CBC により URL を暗号化し、サーバ側で復号してリクエストを送信します。
   </p>
 
   <script>
+    // サーバと同じ 32 バイト・キーを hex 文字列で埋め込む
     const SECRET_KEY_HEX =
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
-    // hex → Uint8Array
+    // hex文字列 → Uint8Array
     function hexToBytes(hex) {
-      const bytes = new Uint8Array(hex.length/2);
-      for (let i=0; i<bytes.length; i++) {
-        bytes[i] = parseInt(hex.substr(i*2,2), 16);
+      const len = hex.length / 2;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = parseInt(hex.substr(i*2, 2), 16);
       }
       return bytes;
     }
 
-    // AES-CBC 暗号化
+    // 平文 URL → URL-safe Base64 暗号化文字列
     async function encryptUrl(plain) {
       const keyBytes = hexToBytes(SECRET_KEY_HEX);
       const key = await crypto.subtle.importKey(
         'raw', keyBytes, { name:'AES-CBC' }, false, ['encrypt']
       );
       const iv = crypto.getRandomValues(new Uint8Array(16));
-      const encoded = new TextEncoder().encode(plain);
-      const ctBuffer = await crypto.subtle.encrypt(
-        { name:'AES-CBC', iv }, key, encoded
+      const enc = new TextEncoder().encode(plain);
+      const ct = await crypto.subtle.encrypt(
+        { name:'AES-CBC', iv }, key, enc
       );
-      const ctBytes = new Uint8Array(ctBuffer);
-      const combined = new Uint8Array(iv.length + ctBytes.length);
+      const ctArr = new Uint8Array(ct);
+      const combined = new Uint8Array(iv.length + ctArr.length);
       combined.set(iv);
-      combined.set(ctBytes, iv.length);
+      combined.set(ctArr, iv.length);
 
       // Base64
-      let bin = '';
-      combined.forEach(b => bin += String.fromCharCode(b));
-      let b64 = btoa(bin);
+      let str = '';
+      for (let b of combined) str += String.fromCharCode(b);
+      let b64 = btoa(str);
 
       // URL-safe
       return b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
@@ -70,13 +74,12 @@
         e.preventDefault();
         let u = document.getElementById('url').value.trim();
         if (!u) return;
+        // プロトコル付きでなければ補完 or 検索
         if (!/^https?:\/\//i.test(u)) {
           if (u.includes('.') && !u.includes(' ')) {
             u = 'https://' + u;
           } else {
-            u =
-              'https://google.com/search?q=' +
-              encodeURIComponent(u);
+            u = 'https://google.com/search?q=' + encodeURIComponent(u);
           }
         }
         const enc = await encryptUrl(u);
@@ -84,7 +87,7 @@
           `${location.protocol}//${location.host}/proxy/${enc}`;
       });
 
-    // URL の ?error=xxx を画面に表示
+    // ?error= メッセージがあれば表示
     function checkError() {
       const p = new URLSearchParams(location.search);
       if (p.has('error')) {
