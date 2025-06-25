@@ -4,93 +4,75 @@
   <meta charset="UTF-8">
   <title>Node Unblocker</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <style>
-    body { font-family: sans-serif; margin: 2em; }
-    #error { color: red; margin-bottom: 1em; display: none; }
-    .footer { margin-top: 2em; font-size: 0.9em; color: #666; }
-  </style>
+  <!-- CryptoJS を読み込み -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
 </head>
-
 <body>
   <h1>Node Unblocker</h1>
-  <div id="error"></div>
-
-  <form id="unblocker-form" action="no-js" method="get">
+  <div id="error" style="color:red; display:none;"></div>
+  <form id="unblocker-form">
     <p>
-      URL or Search:
-      <input type="text" id="url" name="url" autofocus>
+      URLまたはキーワード:
+      <input type="text" id="url" autofocus>
       <input type="submit" value="Go">
     </p>
   </form>
 
-  <div id="google-ad">
-    <script async src="//pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
-    <!-- Nodeunblocker.com -->
-    <ins class="adsbygoogle"
-         style="display:inline-block;width:336px;height:280px"
-         data-ad-client="ca-pub-9477050254721722"
-         data-ad-slot="3464697570"></ins>
-    <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
-  </div>
-
+  <!-- 広告や説明省略 -->
   <h3>About Node Unblocker</h3>
-  <p>Node Unblocker is a web proxy, similar to CGIProxy, PHProxy, or Glype, that allows users to evade filters and censorship and access blocked websites.</p>
-  <p>It's designed to be extremely fast and compatible: It processes the data on-the-fly rather than buffering the entire response, and it only modifies URLs when necessary - relative ones will "just work".</p>
-  <p>Now compatible with YouTube (it replaces youtube.com video pages with a custom page that just streams the video)!</p>
-  <p>Node Unblocker is written in JavaScript with <a href="http://nodejs.org">node.js</a>. The source code is <a href="https://github.com/nfriedly/node-unblocker">available on GitHub</a>.</p>
-
-  <div class="footer">
-    <p>
-      <a href="https://github.com/nfriedly/node-unblocker">Node Unblocker</a>
-      by <a href="http://www.nfriedly.com/">Nathan Friedly</a>
-    </p>
-  </div>
+  <p>Node.js製の高速Webプロキシ…</p>
 
   <script>
-    // ─── シーザー暗号化・復号関数 ───────────────────────────────
-    function caesarShift(str, shift) {
-      return Array.from(str).map(c =>
-        String.fromCharCode(c.charCodeAt(0) + shift)
-      ).join('');
+    // ここにサーバーと合わせた同一の16進キーを入れる
+    const KEY_HEX = '<ここにENCRYPTION_KEYの値をペースト>';
+    const KEY = CryptoJS.enc.Hex.parse(KEY_HEX);
+
+    // URLセーフBase64変換
+    function base64url(str) {
+      return str.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
     }
 
-    // ─── フォーム送信時 ────────────────────────────────────────
-    document.getElementById('unblocker-form').onsubmit = function(e) {
-      e.preventDefault();
-      var url = document.getElementById('url').value.trim();
+    // AES-CBCで暗号化（IV付き）
+    function encrypt(text) {
+      const iv = CryptoJS.lib.WordArray.random(16);
+      const encrypted = CryptoJS.AES.encrypt(text, KEY, {
+        iv: iv, mode: CryptoJS.mode.CBC, padding: CryptoJS.pad.Pkcs7
+      });
+      // iv + ciphertext を連結してBase64 → URLセーフ化
+      const combined = iv.concat(encrypted.ciphertext);
+      return base64url(combined.toString(CryptoJS.enc.Base64));
+    }
 
-      // http プレフィックスがなければ heuristics
-      if (!url.startsWith('http')) {
-        if (url.includes('.') && !url.includes(' ')) {
-          url = 'https://' + url;
-        } else {
-          url = 'https://google.com/search?q=' + encodeURIComponent(url);
-        }
+    // エラー表示用
+    function showError(msg) {
+      const e = document.getElementById('error');
+      e.textContent = msg;
+      e.style.display = 'block';
+    }
+
+    document.getElementById('unblocker-form').onsubmit = function() {
+      let val = document.getElementById('url').value.trim();
+      if (!val) { showError('URLを入力してください'); return false; }
+      // プロトコル省略時はGoogle検索 or https://補完
+      if (!val.startsWith('http')) {
+        if (val.includes('.') && !val.includes(' ')) val = 'https://' + val;
+        else val = 'https://google.com/search?q=' + encodeURIComponent(val);
       }
-
-      // シーザー暗号化（全文字 code+1）＋URLエンコード
-      var encrypted = caesarShift(url, 1);
-      var safe = encodeURIComponent(encrypted);
-
-      window.location = location.protocol + '//' + location.host +
-                        '/proxy/' + safe;
+      try {
+        const token = encrypt(val);
+        // エンコードして /proxy/<暗号トークン> へリダイレクト
+        window.location = `${location.protocol}//${location.host}/proxy/${encodeURIComponent(token)}`;
+      } catch (e) {
+        showError('暗号化に失敗しました');
+      }
+      return false;
     };
 
-    // ─── エラー表示チェック ────────────────────────────────────
-    function checkError() {
-      var m = window.location.search.match(/[?&]error=([^&]+)/);
-      if (m) {
-        var msg = decodeURIComponent(m[1]);
-        var el = document.getElementById('error');
-        el.textContent = msg;
-        el.style.display = 'block';
-      }
-    }
-
+    // URLバーに ?error=xxx があれば表示
     window.onload = function() {
+      const p = location.search.match(/[?&]error=([^&]+)/);
+      if (p) showError(decodeURIComponent(p[1]));
       document.getElementById('url').focus();
-      checkError();
     };
   </script>
 </body>
